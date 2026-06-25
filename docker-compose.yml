@@ -1,0 +1,86 @@
+name: my-api-cluster
+
+services:
+  # Наш Go API Сервер
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: go_api_server
+    ports:
+      - "8082:8082"
+    environment:
+      - REDIS_MASTER_ADDR=redis-master:6379
+      - REDIS_REPLICA_ADDR=redis-replica:6379
+      - KAFKA_ADDR=kafka:9092
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+
+  # Redis Master (для записи)
+  redis-master:
+    image: redis:7-alpine
+    container_name: redis_master
+    ports:
+      - "6381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Redis Replica (для чтения)
+  redis-replica:
+    image: redis:7-alpine
+    container_name: redis_replica
+    command: redis-server --replicaof redis-master 6379
+    ports:
+      - "6382:6379"
+    depends_on:
+      - redis-master
+
+  # Инфраструктура Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.3.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.3.0
+    container_name: kafka
+    ports:
+      - "9093:9093"
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9093,PLAINTEXT_INTERNAL://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  # Наш сборщик метрик Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    depends_on:
+      - app
+
+  # 🔥 Панель визуализации Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
